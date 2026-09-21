@@ -1,3 +1,10 @@
+# 推送到 main 后：构建 Vite 产物并 rsync 到服务器网站目录
+# GitHub Secrets：
+#   DEPLOY_HOST     服务器 IP，如 139.155.154.172
+#   DEPLOY_USER     SSH 用户，如 root
+#   DEPLOY_PATH     网站根目录，如 /www/wwwroot/char-card-studio
+#   DEPLOY_SSH_KEY  部署私钥全文（对应公钥已在服务器 authorized_keys）
+#   DEPLOY_PORT     可选，SSH 端口，默认 22（宝塔改过端口就填实际值）
 name: Deploy frontend
 
 on:
@@ -13,6 +20,7 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,15 +38,47 @@ jobs:
         run: npm run build
 
       - name: Setup SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "缺少 Secret: DEPLOY_HOST"
+            exit 1
+          fi
+          if [ -z "$DEPLOY_SSH_KEY" ]; then
+            echo "缺少 Secret: DEPLOY_SSH_KEY（需粘贴私钥全文，含 BEGIN/END 行）"
+            exit 1
+          fi
 
-      - name: Sync to server
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          PORT="${DEPLOY_PORT:-22}"
+          echo "Scanning host $DEPLOY_HOST port $PORT"
+          ssh-keyscan -p "$PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          # 验证私钥格式是否可读
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > /dev/null
+
+      - name: Sync dist to server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
         run: |
+          PORT="${DEPLOY_PORT:-22}"
+          if [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_PATH" ]; then
+            echo "缺少 Secret: DEPLOY_USER 或 DEPLOY_PATH"
+            exit 1
+          fi
+
+          echo "Deploying to $DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH (port $PORT)"
           rsync -avz --delete \
-            -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
+            -e "ssh -i ~/.ssh/id_ed25519 -p $PORT -o StrictHostKeyChecking=no" \
             dist/ \
-            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PATH }}/"
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+          echo "Deployed OK"
