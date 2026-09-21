@@ -77,7 +77,9 @@ jobs:
           fi
 
           echo "Deploying to $DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH (port $PORT)"
+          # 排除宝塔保护文件 .user.ini（常带不可变属性，--delete 会报 Operation not permitted）
           rsync -avz --delete \
+            --exclude '.user.ini' \
             -e "ssh -i ~/.ssh/id_ed25519 -p $PORT -o StrictHostKeyChecking=no" \
             dist/ \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
